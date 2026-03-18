@@ -1,0 +1,22 @@
+name = "nonui-cfo"
+main = "worker.ts"
+compatibility_date = "2026-03-16"
+
+[ai]
+binding = "AI"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "nonui-cfo"
+database_id = "fe7909eb-fcac-43ce-8107-52920b9ce657"
+preview_database_id = "fe7909eb-fcac-43ce-8107-52920b9ce657"
+
+[vars]
+AI_PROVIDER = "cloudflare"
+AI_MODEL = "@cf/meta/llama-3.1-8b-instruct"
+GEMINI_MODEL = "gemini-2.5-flash"
+GROQ_MODEL = "llama-3.3-70b-versatile"
+OPENAI_MODEL = "gpt-4.1-mini"
+ANTHROPIC_MODEL = "claude-3-5-sonnet-latest"
+TAX_RESERVE_RATE = "0.30"
+INFRA_ALERT_THRESHOLD = "50000"
