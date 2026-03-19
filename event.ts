@@ -15,6 +15,8 @@ export function normalizeIncomingEvent(payload: unknown): EconEvent {
   const source = stringValue(raw.source) ?? "manual";
   const type = stringValue(raw.type) ?? "manual.recorded";
   const eventVersion = normalizeEventVersion(raw.eventVersion);
+  const causationId = stringValue(raw.causationId);
+  const correlationId = stringValue(raw.correlationId) ?? id;
   const timestamp = normalizeTimestamp(stringValue(raw.timestamp) ?? stringValue(raw.date) ?? new Date().toISOString());
   const amount = optionalNumber(raw.amount);
   const description = stringValue(raw.description);
@@ -30,6 +32,8 @@ export function normalizeIncomingEvent(payload: unknown): EconEvent {
     schemaVersion: ECON_EVENT_SCHEMA_VERSION,
     eventVersion,
     id,
+    causationId,
+    correlationId,
     source,
     type,
     eventClass,
@@ -58,6 +62,8 @@ export function normalizeStripeEvent(event: StripeEvent): EconEvent | null {
         schemaVersion: ECON_EVENT_SCHEMA_VERSION,
         eventVersion: 1,
         id: event.id,
+        causationId: undefined,
+        correlationId: event.id,
         source: "stripe",
         type: "payment.received",
         eventClass: "financial_transaction",
@@ -76,6 +82,8 @@ export function normalizeStripeEvent(event: StripeEvent): EconEvent | null {
         schemaVersion: ECON_EVENT_SCHEMA_VERSION,
         eventVersion: 1,
         id: event.id,
+        causationId: undefined,
+        correlationId: event.id,
         source: "stripe",
         type: "payment.received",
         eventClass: "financial_transaction",
@@ -94,6 +102,8 @@ export function normalizeStripeEvent(event: StripeEvent): EconEvent | null {
         schemaVersion: ECON_EVENT_SCHEMA_VERSION,
         eventVersion: 1,
         id: event.id,
+        causationId: undefined,
+        correlationId: event.id,
         source: "stripe",
         type: "refund.issued",
         eventClass: "financial_transaction",
@@ -105,6 +115,43 @@ export function normalizeStripeEvent(event: StripeEvent): EconEvent | null {
         description: description ?? `Stripe refund ${counterparty}`,
         tags: ["refund", "stripe"],
         relatedEventIds: normalizeStringArray(object.charge, object.payment_intent),
+        metadata: { stripeEventType: event.type, stripe: event },
+      };
+    case "invoice.payment_failed":
+      return {
+        schemaVersion: ECON_EVENT_SCHEMA_VERSION,
+        eventVersion: 1,
+        id: event.id,
+        correlationId: event.id,
+        source: "stripe",
+        type: "payment.failed",
+        eventClass: "financial_transaction",
+        timestamp,
+        amount: toMajorUnit(object.amount_due ?? object.amount_remaining ?? 0),
+        currency,
+        actor: "customer",
+        counterparty,
+        description: description ?? `Stripe invoice payment failed ${counterparty}`,
+        tags: ["stripe", "payment_failed"],
+        relatedEventIds: normalizeStringArray(object.invoice),
+        metadata: { stripeEventType: event.type, stripe: event },
+      };
+    case "customer.created":
+      return {
+        schemaVersion: ECON_EVENT_SCHEMA_VERSION,
+        eventVersion: 1,
+        id: event.id,
+        correlationId: event.id,
+        source: "stripe",
+        type: "customer.created",
+        eventClass: "operational_event",
+        timestamp,
+        currency,
+        actor: "customer",
+        counterparty,
+        description: description ?? `Stripe customer created ${counterparty}`,
+        tags: ["stripe", "customer"],
+        relatedEventIds: undefined,
         metadata: { stripeEventType: event.type, stripe: event },
       };
     default:

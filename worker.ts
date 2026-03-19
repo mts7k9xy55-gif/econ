@@ -1,20 +1,36 @@
 import { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
 import { processAI } from "./ai";
-import { executeAction, listActionExecutors } from "./actions";
+import { executeAction, fetchRunnableActions, listActionExecutors, processQueuedActions } from "./actions";
 import { econEventToLedgerInsert, normalizeIncomingEvent, normalizeStripeEvent } from "./event";
+import { renderLandingPage, resolveLandingLocale } from "./landing";
 import {
+  getActionQueueSummary,
   getLedgerEntry,
   getProcessedEvent,
+  insertEconEvent,
   insertLedgerEntry,
+  listBalances,
+  listActionQueue,
+  listCashflow,
   listRecentActions,
   listRecentLedger,
+  listReplayRuns,
+  insertWaitlistSignup,
   recordProcessedEvent,
   updateLedgerCategory,
 } from "./ledger";
+import { refreshReadModels, runReplay } from "./replay";
 import { applyRuleLayer, listRules } from "./rules";
 import { parseStripeEvent } from "./stripe";
 import type { EconEvent } from "./types";
+import {
+  buildWaitlistRedirect,
+  isValidWaitlistEmail,
+  normalizeWaitlistEmail,
+  normalizeWaitlistLocale,
+  resolveWaitlistStatus,
+} from "./waitlist";
 
 type Bindings = {
   AI?: Ai;
@@ -38,6 +54,12 @@ type Bindings = {
 
 const app = new Hono<{ Bindings: Bindings }>();
 
+app.get("/", (c) => {
+  const locale = resolveLandingLocale(c.req.query("lang"), c.req.header("Accept-Language"));
+  const waitlistStatus = resolveWaitlistStatus(c.req.query("waitlist"));
+  return c.html(renderLandingPage(locale, waitlistStatus));
+});
+
 app.get("/health", (c) => c.json({ ok: true }));
 
 app.get("/ledger", async (c) => {
@@ -52,8 +74,43 @@ app.get("/actions", async (c) => {
   return c.json({ ok: true, results });
 });
 
+app.get("/action-queue", async (c) => {
+  const limit = Number(c.req.query("limit") ?? "50");
+  const [summary, results] = await Promise.all([
+    getActionQueueSummary(c.env.DB),
+    listActionQueue(c.env.DB, clampLimit(limit)),
+  ]);
+
+  return c.json({ ok: true, summary, results });
+});
+
 app.get("/action-executors", (c) => {
   return c.json({ ok: true, results: listActionExecutors() });
+});
+
+app.get("/balances", async (c) => {
+  const limit = Number(c.req.query("limit") ?? "100");
+  const results = await listBalances(c.env.DB, clampLimit(limit));
+  return c.json({ ok: true, results });
+});
+
+app.get("/cashflow", async (c) => {
+  const limit = Number(c.req.query("limit") ?? "24");
+  const results = await listCashflow(c.env.DB, clampLimit(limit));
+  return c.json({ ok: true, results });
+});
+
+app.get("/replay-runs", async (c) => {
+  const limit = Number(c.req.query("limit") ?? "20");
+  const results = await listReplayRuns(c.env.DB, clampLimit(limit));
+  return c.json({ ok: true, results });
+});
+
+app.post("/actions/run", async (c) => {
+  const limit = Number((await c.req.json().catch(() => ({})) as { limit?: number }).limit ?? "20");
+  const actions = await fetchRunnableActions(c.env, clampLimit(limit));
+  const results = await processQueuedActions(c.env, actions, async (ledgerId) => getLedgerEntry(c.env.DB, ledgerId));
+  return c.json({ ok: true, processed: results.length, results });
 });
 
 app.get("/rules", (c) => {
@@ -65,6 +122,18 @@ app.post("/event", async (c) => {
   const econEvent = normalizeIncomingEvent(payload);
   const result = await ingestEvent(c.env, econEvent);
   return c.json({ ok: true, event: econEvent, ...result });
+});
+
+app.post("/replay", async (c) => {
+  const body = (await c.req.json().catch(() => ({}))) as {
+    fromTimestamp?: string;
+    dryRun?: boolean;
+  };
+  const result = await runReplay(c.env, {
+    fromTimestamp: body.fromTimestamp,
+    dryRun: Boolean(body.dryRun),
+  });
+  return c.json({ ok: true, ...result });
 });
 
 app.post("/webhooks/stripe", async (c) => {
@@ -79,6 +148,53 @@ app.post("/webhooks/stripe", async (c) => {
   const result = await ingestEvent(c.env, econEvent);
 
   return c.json({ ok: true, source: "stripe", event: econEvent, ...result });
+});
+
+app.post("/waitlist", async (c) => {
+  const payload = await parseWaitlistPayload(c.req.raw);
+  const locale = normalizeWaitlistLocale(payload.locale);
+  const email = normalizeWaitlistEmail(payload.email);
+  const wantsJson = c.req.header("accept")?.includes("application/json") ?? false;
+
+  if (!isValidWaitlistEmail(email)) {
+    if (wantsJson) {
+      return c.json({ ok: false, error: "Invalid email address" }, 400);
+    }
+
+    return c.redirect(buildWaitlistRedirect(locale, "invalid"), 303);
+  }
+
+  try {
+    const signup = await insertWaitlistSignup(c.env.DB, {
+      id: `wait_${crypto.randomUUID()}`,
+      email,
+      locale,
+      sourcePath: "/",
+      userAgent: c.req.header("user-agent") ?? null,
+    });
+
+    if (wantsJson) {
+      return c.json({ ok: true, signup }, 201);
+    }
+
+    return c.redirect(buildWaitlistRedirect(locale, "success"), 303);
+  } catch (error) {
+    if (isUniqueConstraintError(error)) {
+      if (wantsJson) {
+        return c.json({ ok: true, duplicate: true }, 200);
+      }
+
+      return c.redirect(buildWaitlistRedirect(locale, "exists"), 303);
+    }
+
+    console.error(error);
+
+    if (wantsJson) {
+      return c.json({ ok: false, error: "Failed to save waitlist signup" }, 500);
+    }
+
+    return c.redirect(buildWaitlistRedirect(locale, "error"), 303);
+  }
 });
 
 app.onError((error, c) => {
@@ -99,6 +215,16 @@ app.onError((error, c) => {
 export default app;
 
 async function ingestEvent(env: Bindings, event: EconEvent) {
+  try {
+    await insertEconEvent(env.DB, event);
+  } catch (error) {
+    if (isUniqueConstraintError(error)) {
+      const existingProcessedEvent = await getProcessedEvent(env.DB, event.id);
+      return buildDuplicateResponse(env, event.id, existingProcessedEvent?.ledger_id ?? event.id);
+    }
+    throw error;
+  }
+
   const existingProcessedEvent = await getProcessedEvent(env.DB, event.id);
   if (existingProcessedEvent) {
     return buildDuplicateResponse(env, event.id, existingProcessedEvent.ledger_id);
@@ -133,13 +259,15 @@ async function ingestEvent(env: Bindings, event: EconEvent) {
     },
     decision,
   );
+  await refreshReadModels(env);
 
   return {
     ledgerId: ledgerRow.id,
     eventId: event.id,
     duplicate: false,
     category: decision.category,
-    action: decision.action,
+    action: decision.decisionAction,
+    decisionAction: decision.decisionAction,
     reason: decision.reason ?? null,
     ruleMatch,
     actionRecord: action,
@@ -170,4 +298,28 @@ function clampLimit(value: number): number {
   }
 
   return Math.min(Math.trunc(value), 200);
+}
+
+async function parseWaitlistPayload(request: Request): Promise<{ email?: string; locale?: string }> {
+  const contentType = request.headers.get("content-type")?.toLowerCase() ?? "";
+
+  if (contentType.includes("application/json")) {
+    return (await request.json().catch(() => ({}))) as { email?: string; locale?: string };
+  }
+
+  if (contentType.includes("application/x-www-form-urlencoded") || contentType.includes("multipart/form-data")) {
+    const formData = await request.formData();
+    const email = formData.get("email");
+    const locale = formData.get("locale");
+    return {
+      email: typeof email === "string" ? email : undefined,
+      locale: typeof locale === "string" ? locale : undefined,
+    };
+  }
+
+  const params = new URLSearchParams(await request.text());
+  return {
+    email: params.get("email") ?? undefined,
+    locale: params.get("locale") ?? undefined,
+  };
 }

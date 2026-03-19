@@ -22,7 +22,7 @@ test("rules execute in priority order", () => {
       stopProcessing: false,
       mergePolicy: "first-wins",
       match: () => true,
-      decision: () => ({ category: "low", action: "none", reason: "low" }),
+      decision: () => ({ category: "low", decisionAction: "none", reason: "low" }),
     },
     {
       id: "high-priority",
@@ -31,7 +31,7 @@ test("rules execute in priority order", () => {
       stopProcessing: false,
       mergePolicy: "first-wins",
       match: () => true,
-      decision: () => ({ category: "high", action: "none", reason: "high" }),
+      decision: () => ({ category: "high", decisionAction: "none", reason: "high" }),
     },
   ];
 
@@ -50,7 +50,7 @@ test("stopProcessing halts later rule evaluation", () => {
       stopProcessing: true,
       mergePolicy: "first-wins",
       match: () => true,
-      decision: () => ({ category: "first", action: "none", reason: "first" }),
+      decision: () => ({ category: "first", decisionAction: "none", reason: "first" }),
     },
     {
       id: "never-runs",
@@ -59,7 +59,7 @@ test("stopProcessing halts later rule evaluation", () => {
       stopProcessing: false,
       mergePolicy: "first-wins",
       match: () => true,
-      decision: () => ({ category: "second", action: "none", reason: "second" }),
+      decision: () => ({ category: "second", decisionAction: "none", reason: "second" }),
     },
   ];
 
@@ -67,4 +67,40 @@ test("stopProcessing halts later rule evaluation", () => {
   assert.ok(result);
   assert.equal(result.ruleId, "stop-first");
   assert.deepEqual(result.matchedRuleIds, ["stop-first"]);
+});
+
+test("failed stripe payments do not match revenue rule", () => {
+  const failedPayment: LedgerRow = {
+    id: "ledger_failed_payment",
+    date: "2026-03-19T00:00:00.000Z",
+    description: "Failed invoice",
+    amount: 500,
+    category: null,
+    source: "stripe",
+    raw_event: JSON.stringify({
+      type: "payment.failed",
+      eventClass: "financial_transaction",
+    }),
+  };
+
+  const result = applyRuleLayer(failedPayment);
+  assert.equal(result, null);
+});
+
+test("customer created event does not match revenue rule", () => {
+  const customerCreated: LedgerRow = {
+    id: "ledger_customer_created",
+    date: "2026-03-19T00:00:00.000Z",
+    description: "New customer",
+    amount: 0,
+    category: null,
+    source: "stripe",
+    raw_event: JSON.stringify({
+      type: "customer.created",
+      eventClass: "operational_event",
+    }),
+  };
+
+  const result = applyRuleLayer(customerCreated);
+  assert.equal(result, null);
 });

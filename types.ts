@@ -10,10 +10,12 @@ export type EconEventSource = ExtensibleString<
 
 export type EconEventType = ExtensibleString<
   | "payment.received"
+  | "payment.failed"
   | "refund.issued"
   | "cost.incurred"
   | "invoice.created"
   | "tax.observed"
+  | "customer.created"
   | "action.requested"
   | "action.completed"
   | "manual.recorded"
@@ -25,6 +27,8 @@ export type EconEvent = {
   schemaVersion: EconEventVersion;
   eventVersion: number;
   id: string;
+  causationId?: string;
+  correlationId?: string;
   source: EconEventSource;
   type: EconEventType;
   eventClass: EconEventClass;

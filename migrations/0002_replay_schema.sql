@@ -1,23 +1,3 @@
-CREATE TABLE IF NOT EXISTS ledger (
-  id TEXT PRIMARY KEY,
-  date TEXT NOT NULL,
-  description TEXT NOT NULL,
-  amount REAL NOT NULL,
-  category TEXT,
-  source TEXT DEFAULT 'manual',
-  raw_event TEXT
-);
-
-CREATE TABLE IF NOT EXISTS actions (
-  id TEXT PRIMARY KEY,
-  type TEXT NOT NULL,
-  payload TEXT NOT NULL,
-  status TEXT NOT NULL,
-  retry_count INTEGER NOT NULL DEFAULT 0,
-  max_retries INTEGER NOT NULL DEFAULT 3,
-  next_retry_at TEXT
-);
-
 CREATE TABLE IF NOT EXISTS econ_event (
   id TEXT PRIMARY KEY,
   schema_version TEXT NOT NULL,
@@ -37,12 +17,6 @@ CREATE TABLE IF NOT EXISTS econ_event (
   correlation_id TEXT,
   metadata TEXT NOT NULL,
   payload TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS processed_events (
-  event_id TEXT PRIMARY KEY,
-  ledger_id TEXT NOT NULL,
-  processed_at TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS balances (
@@ -75,17 +49,5 @@ CREATE TABLE IF NOT EXISTS replay_runs (
   status TEXT NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS waitlist_signups (
-  id TEXT PRIMARY KEY,
-  email TEXT NOT NULL UNIQUE,
-  locale TEXT NOT NULL,
-  source_path TEXT NOT NULL,
-  user_agent TEXT,
-  created_at TEXT NOT NULL
-);
-
-CREATE INDEX IF NOT EXISTS idx_ledger_date ON ledger(date DESC);
-CREATE INDEX IF NOT EXISTS idx_actions_status ON actions(status);
 CREATE INDEX IF NOT EXISTS idx_econ_event_timestamp ON econ_event(timestamp ASC);
 CREATE INDEX IF NOT EXISTS idx_econ_event_correlation_id ON econ_event(correlation_id);
-CREATE INDEX IF NOT EXISTS idx_waitlist_signups_created_at ON waitlist_signups(created_at DESC);

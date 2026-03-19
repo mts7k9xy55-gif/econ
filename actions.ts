@@ -1,5 +1,14 @@
-import type { AiDecision } from "./ai";
-import { createAction, updateActionStatus, type LedgerRow, type ActionRow } from "./ledger";
+import type { AiDecision, DecisionAction } from "./ai";
+import {
+  createAction,
+  listRunnableActions,
+  markActionDone,
+  markActionFailed,
+  markActionProcessing,
+  scheduleActionRetry,
+  type ActionRow,
+  type LedgerRow,
+} from "./ledger";
 
 export type ActionType =
   | "invoice"
@@ -8,9 +17,16 @@ export type ActionType =
   | "alert_cash_outflow"
   | "notify_slack";
 
+export type ExecutionActionType =
+  | "invoice.create"
+  | "treasury.reserve_tax"
+  | "alert.cost_increase.record"
+  | "alert.cash_outflow.record"
+  | "notify.slack.send";
+
 export type ExecutorDestination = "internal_webhook" | "slack_webhook" | "action_queue";
 export type ExecutorState = "implemented" | "stub" | "unimplemented";
-export type ExecutorStatus = "done" | "queued" | "ignored" | "failed" | "unimplemented";
+export type ExecutorStatus = "done" | "queued" | "processing" | "ignored" | "failed" | "unimplemented";
 
 type EnvLike = {
   DB: D1Database;
@@ -19,15 +35,31 @@ type EnvLike = {
   TAX_RESERVE_RATE?: string;
 };
 
+type ExecutorPayload = {
+  ledgerId: string;
+  category: string;
+  decisionAction: Exclude<DecisionAction, "none">;
+  executionAction: ExecutionActionType;
+  description: string;
+  amount: number;
+  reason: string | null;
+  executor: {
+    destination: ExecutorDestination;
+    state: ExecutorState;
+    unimplemented: string[];
+  };
+};
+
 type ExecutorContext = {
   env: EnvLike;
-  tx: LedgerRow;
-  decision: AiDecision;
+  tx: LedgerRow | null;
+  payload: ExecutorPayload;
   actionId: string;
 };
 
 export type ActionExecutorDefinition = {
-  type: ActionType;
+  decisionAction: Exclude<DecisionAction, "none">;
+  executionAction: ExecutionActionType;
   destination: ExecutorDestination;
   state: ExecutorState;
   summary: string;
@@ -38,7 +70,8 @@ export type ActionExecutorDefinition = {
 
 const actionExecutors: Record<ActionType, ActionExecutorDefinition> = {
   invoice: {
-    type: "invoice",
+    decisionAction: "invoice",
+    executionAction: "invoice.create",
     destination: "internal_webhook",
     state: "stub",
     summary: "Forward invoice creation requests to an internal executor webhook.",
@@ -47,10 +80,11 @@ const actionExecutors: Record<ActionType, ActionExecutorDefinition> = {
       "Direct invoice system integration is not implemented.",
       "Delivery confirmation from the downstream billing tool is not persisted.",
     ],
-    run: ({ env, tx, actionId }) => sendInvoice(env, tx, actionId),
+    run: ({ env, payload, tx, actionId }) => sendInvoice(env, payload, tx, actionId),
   },
   reserve_tax: {
-    type: "reserve_tax",
+    decisionAction: "reserve_tax",
+    executionAction: "treasury.reserve_tax",
     destination: "internal_webhook",
     state: "stub",
     summary: "Compute reserve amount and optionally forward it to an internal executor webhook.",
@@ -59,34 +93,37 @@ const actionExecutors: Record<ActionType, ActionExecutorDefinition> = {
       "Actual fund movement is not implemented.",
       "Reserve ledger booking is not implemented.",
     ],
-    run: ({ env, tx, actionId }) => reserveTax(env, tx, actionId),
+    run: ({ env, payload, actionId }) => reserveTax(env, payload, actionId),
   },
   alert_cost_increase: {
-    type: "alert_cost_increase",
+    decisionAction: "alert_cost_increase",
+    executionAction: "alert.cost_increase.record",
     destination: "action_queue",
     state: "implemented",
     summary: "Persist cost increase alerts to the actions queue and optionally fan out to Slack.",
     requires: ["SLACK_WEBHOOK_URL"],
     unimplemented: ["No secondary escalation channel beyond Slack/action queue."],
-    run: ({ env, tx, decision, actionId }) => sendSlack(env, tx, decision, actionId),
+    run: ({ env, payload, actionId }) => sendSlack(env, payload, actionId),
   },
   alert_cash_outflow: {
-    type: "alert_cash_outflow",
+    decisionAction: "alert_cash_outflow",
+    executionAction: "alert.cash_outflow.record",
     destination: "action_queue",
     state: "implemented",
     summary: "Persist cash outflow alerts to the actions queue and optionally fan out to Slack.",
     requires: ["SLACK_WEBHOOK_URL"],
     unimplemented: ["No treasury approval flow is implemented."],
-    run: ({ env, tx, decision, actionId }) => sendSlack(env, tx, decision, actionId),
+    run: ({ env, payload, actionId }) => sendSlack(env, payload, actionId),
   },
   notify_slack: {
-    type: "notify_slack",
+    decisionAction: "notify_slack",
+    executionAction: "notify.slack.send",
     destination: "slack_webhook",
     state: "implemented",
     summary: "Send a generic notification to Slack when configured, otherwise leave it queued.",
     requires: ["SLACK_WEBHOOK_URL"],
     unimplemented: ["Slack is the only direct notification sink currently implemented."],
-    run: ({ env, tx, decision, actionId }) => sendSlack(env, tx, decision, actionId),
+    run: ({ env, payload, actionId }) => sendSlack(env, payload, actionId),
   },
 };
 
@@ -99,34 +136,38 @@ export async function executeAction(
   tx: LedgerRow,
   decision: AiDecision,
 ): Promise<ActionRow | null> {
-  if (!decision.action || decision.action === "none") {
+  if (!decision.decisionAction || decision.decisionAction === "none") {
     return null;
   }
 
-  const executor = actionExecutors[decision.action as ActionType];
+  const executor = actionExecutors[decision.decisionAction as ActionType];
   if (!executor) {
-    const action = await createAction(env.DB, {
+    return createAction(env.DB, {
       id: crypto.randomUUID(),
-      type: decision.action,
+      type: "unimplemented",
       payload: {
         ledgerId: tx.id,
         category: decision.category,
+        decisionAction: decision.decisionAction,
         description: tx.description,
         amount: tx.amount,
         reason: decision.reason ?? null,
       },
       status: "unimplemented",
+      retryCount: 0,
+      maxRetries: 0,
+      nextRetryAt: null,
     });
-
-    return action;
   }
 
-  const action = await createAction(env.DB, {
+  return createAction(env.DB, {
     id: crypto.randomUUID(),
-    type: decision.action,
+    type: executor.executionAction,
     payload: {
       ledgerId: tx.id,
       category: decision.category,
+      decisionAction: decision.decisionAction,
+      executionAction: executor.executionAction,
       description: tx.description,
       amount: tx.amount,
       reason: decision.reason ?? null,
@@ -137,29 +178,84 @@ export async function executeAction(
       },
     },
     status: "queued",
+    retryCount: 0,
+    maxRetries: 3,
+    nextRetryAt: new Date().toISOString(),
   });
+}
 
+export async function processQueuedActions(
+  env: EnvLike,
+  actions: ActionRow[],
+  ledgerLookup: (ledgerId: string) => Promise<LedgerRow | null>,
+): Promise<Array<{ id: string; type: string; status: ExecutorStatus }>> {
+  const results: Array<{ id: string; type: string; status: ExecutorStatus }> = [];
+
+  for (const action of actions) {
+    const payload = parseExecutorPayload(action.payload);
+    const executor = Object.values(actionExecutors).find(
+      (definition) => definition.executionAction === action.type,
+    );
+
+    if (!executor || !payload) {
+      await markActionFailed(env.DB, action.id);
+      results.push({ id: action.id, type: action.type, status: "failed" });
+      continue;
+    }
+
+    await markActionProcessing(env.DB, action.id);
+
+    try {
+      const tx = await ledgerLookup(payload.ledgerId);
+      const status = await executor.run({
+        env,
+        tx,
+        payload,
+        actionId: action.id,
+      });
+
+      if (status === "done" || status === "ignored" || status === "unimplemented") {
+        await markActionDone(env.DB, action.id, status === "ignored" ? "ignored" : "done");
+      } else if (status === "queued") {
+        await scheduleActionRetry(env.DB, action.id, action.retry_count + 1, action.max_retries);
+      } else {
+        await markActionFailed(env.DB, action.id);
+      }
+
+      results.push({ id: action.id, type: action.type, status });
+    } catch {
+      if (action.retry_count + 1 >= action.max_retries) {
+        await markActionFailed(env.DB, action.id);
+        results.push({ id: action.id, type: action.type, status: "failed" });
+      } else {
+        await scheduleActionRetry(env.DB, action.id, action.retry_count + 1, action.max_retries);
+        results.push({ id: action.id, type: action.type, status: "queued" });
+      }
+    }
+  }
+
+  return results;
+}
+
+export async function fetchRunnableActions(env: EnvLike, limit: number): Promise<ActionRow[]> {
+  return listRunnableActions(env.DB, limit);
+}
+
+function parseExecutorPayload(payload: string): ExecutorPayload | null {
   try {
-    const finalStatus = await executor.run({
-      env,
-      tx,
-      decision,
-      actionId: action.id,
-    });
-
-    return {
-      ...action,
-      status: finalStatus,
-    };
-  } catch (error) {
-    await updateActionStatus(env.DB, action.id, "failed");
-    throw error;
+    return JSON.parse(payload) as ExecutorPayload;
+  } catch {
+    return null;
   }
 }
 
-async function sendInvoice(env: EnvLike, tx: LedgerRow, actionId: string): Promise<ExecutorStatus> {
+async function sendInvoice(
+  env: EnvLike,
+  payload: ExecutorPayload,
+  tx: LedgerRow | null,
+  _actionId: string,
+): Promise<ExecutorStatus> {
   if (!env.INTERNAL_ACTION_WEBHOOK) {
-    await updateActionStatus(env.DB, actionId, "queued");
     return "queued";
   }
 
@@ -167,47 +263,49 @@ async function sendInvoice(env: EnvLike, tx: LedgerRow, actionId: string): Promi
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      type: "invoice",
-      ledgerId: tx.id,
-      amount: tx.amount,
-      description: tx.description,
-      date: tx.date,
+      type: "invoice.create",
+      ledgerId: payload.ledgerId,
+      amount: payload.amount,
+      description: payload.description,
+      date: tx?.date ?? null,
     }),
   });
 
-  await updateActionStatus(env.DB, actionId, "done");
   return "done";
 }
 
-async function reserveTax(env: EnvLike, tx: LedgerRow, actionId: string): Promise<ExecutorStatus> {
+async function reserveTax(
+  env: EnvLike,
+  payload: ExecutorPayload,
+  _actionId: string,
+): Promise<ExecutorStatus> {
   const rate = Number(env.TAX_RESERVE_RATE ?? "0.30");
-  const reserveAmount = Math.max(tx.amount, 0) * rate;
+  const reserveAmount = Math.max(payload.amount, 0) * rate;
 
-  if (env.INTERNAL_ACTION_WEBHOOK) {
-    await fetch(env.INTERNAL_ACTION_WEBHOOK, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        type: "reserve_tax",
-        ledgerId: tx.id,
-        reserveAmount,
-        originalAmount: tx.amount,
-      }),
-    });
+  if (!env.INTERNAL_ACTION_WEBHOOK) {
+    return "queued";
   }
 
-  await updateActionStatus(env.DB, actionId, "done");
+  await fetch(env.INTERNAL_ACTION_WEBHOOK, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      type: "treasury.reserve_tax",
+      ledgerId: payload.ledgerId,
+      reserveAmount,
+      originalAmount: payload.amount,
+    }),
+  });
+
   return "done";
 }
 
 async function sendSlack(
   env: EnvLike,
-  tx: LedgerRow,
-  decision: AiDecision,
-  actionId: string,
+  payload: ExecutorPayload,
+  _actionId: string,
 ): Promise<ExecutorStatus> {
   if (!env.SLACK_WEBHOOK_URL) {
-    await updateActionStatus(env.DB, actionId, "queued");
     return "queued";
   }
 
@@ -216,14 +314,13 @@ async function sendSlack(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       text: [
-        `[nonui-cfo] ${decision.action}`,
-        `category=${decision.category}`,
-        `amount=${tx.amount}`,
-        `description=${tx.description}`,
+        `[nonui-cfo] ${payload.decisionAction}`,
+        `category=${payload.category}`,
+        `amount=${payload.amount}`,
+        `description=${payload.description}`,
       ].join("\n"),
     }),
   });
 
-  await updateActionStatus(env.DB, actionId, "done");
   return "done";
 }

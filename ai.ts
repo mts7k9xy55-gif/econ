@@ -1,8 +1,16 @@
 import type { LedgerRow } from "./ledger";
 
+export type DecisionAction =
+  | "none"
+  | "invoice"
+  | "reserve_tax"
+  | "alert_cost_increase"
+  | "alert_cash_outflow"
+  | "notify_slack";
+
 export type AiDecision = {
   category: string;
-  action: string;
+  decisionAction: DecisionAction;
   reason?: string;
 };
 
@@ -21,7 +29,19 @@ type EnvLike = {
   INFRA_ALERT_THRESHOLD?: string;
 };
 
-export async function processAI(env: EnvLike, tx: LedgerRow): Promise<AiDecision> {
+type ProcessAiOptions = {
+  deterministic?: boolean;
+};
+
+export async function processAI(
+  env: EnvLike,
+  tx: LedgerRow,
+  options: ProcessAiOptions = {},
+): Promise<AiDecision> {
+  if (options.deterministic) {
+    return heuristicDecision(env, tx);
+  }
+
   const provider = (env.AI_PROVIDER ?? "").toLowerCase();
   try {
     if (provider === "cloudflare" && env.AI) {
@@ -255,7 +275,7 @@ function buildPrompt(tx: LedgerRow): string {
   return [
     "会社の財務AIです。",
     "この取引のカテゴリと必要アクションを判断してください。",
-    "action は以下から1つだけ選ぶこと:",
+    "decisionAction は以下から1つだけ選ぶこと:",
     '["none","invoice","reserve_tax","alert_cost_increase","alert_cash_outflow","notify_slack"]',
     "",
     `date: ${tx.date}`,
@@ -264,7 +284,7 @@ function buildPrompt(tx: LedgerRow): string {
     `source: ${tx.source}`,
     "",
     "出力JSON:",
-    '{ "category": "", "action": "", "reason": "" }',
+    '{ "category": "", "decisionAction": "", "reason": "" }',
   ].join("\n");
 }
 
@@ -281,10 +301,12 @@ function parseJsonDecision(raw: string): Partial<AiDecision> {
 }
 
 function normalizeDecision(candidate: Partial<AiDecision>, env: EnvLike, tx: LedgerRow): AiDecision {
-  if (candidate.category && candidate.action) {
+  const decisionAction = candidate.decisionAction ?? (candidate as { action?: DecisionAction }).action;
+
+  if (candidate.category && decisionAction) {
     return {
       category: candidate.category,
-      action: candidate.action,
+      decisionAction,
       reason: candidate.reason,
     };
   }
@@ -295,11 +317,44 @@ function normalizeDecision(candidate: Partial<AiDecision>, env: EnvLike, tx: Led
 function heuristicDecision(env: EnvLike, tx: LedgerRow): AiDecision {
   const text = `${tx.description} ${tx.source}`.toLowerCase();
   const infraAlertThreshold = Number(env.INFRA_ALERT_THRESHOLD ?? "50000");
+  const rawEventType = readRawEventType(tx);
+
+  if (rawEventType === "payment.failed") {
+    return {
+      category: "payment_failure",
+      decisionAction: "notify_slack",
+      reason: "Payment failure event detected.",
+    };
+  }
+
+  if (rawEventType === "customer.created") {
+    return {
+      category: "customer_lifecycle",
+      decisionAction: "none",
+      reason: "Operational customer lifecycle event.",
+    };
+  }
+
+  if (rawEventType === "payment.received") {
+    return {
+      category: "revenue",
+      decisionAction: "none",
+      reason: "Confirmed payment received event.",
+    };
+  }
+
+  if (rawEventType === "refund.issued") {
+    return {
+      category: "cash_outflow",
+      decisionAction: "alert_cash_outflow",
+      reason: "Refund event detected.",
+    };
+  }
 
   if (includesAny(text, ["stripe", "payment", "invoice paid", "入金", "売上"])) {
     return {
       category: "revenue",
-      action: "none",
+      decisionAction: "none",
       reason: "Payment-like transaction.",
     };
   }
@@ -307,7 +362,7 @@ function heuristicDecision(env: EnvLike, tx: LedgerRow): AiDecision {
   if (includesAny(text, ["aws", "gcp", "azure", "openai", "anthropic", "cloudflare"])) {
     return {
       category: "infra_cost",
-      action: tx.amount >= infraAlertThreshold ? "alert_cost_increase" : "none",
+      decisionAction: tx.amount >= infraAlertThreshold ? "alert_cost_increase" : "none",
       reason: "Infrastructure vendor detected.",
     };
   }
@@ -315,7 +370,7 @@ function heuristicDecision(env: EnvLike, tx: LedgerRow): AiDecision {
   if (includesAny(text, ["税", "tax", "vat", "消費税"])) {
     return {
       category: "tax",
-      action: "reserve_tax",
+      decisionAction: "reserve_tax",
       reason: "Tax-related transaction.",
     };
   }
@@ -323,20 +378,33 @@ function heuristicDecision(env: EnvLike, tx: LedgerRow): AiDecision {
   if (tx.amount < 0 || includesAny(text, ["refund", "chargeback"])) {
     return {
       category: "cash_outflow",
-      action: "alert_cash_outflow",
+      decisionAction: "alert_cash_outflow",
       reason: "Negative or refund-like transaction.",
     };
   }
 
   return {
     category: "uncategorized",
-    action: "notify_slack",
+    decisionAction: "notify_slack",
     reason: "Fallback path without model output.",
   };
 }
 
 function includesAny(text: string, patterns: string[]): boolean {
   return patterns.some((pattern) => text.includes(pattern));
+}
+
+function readRawEventType(tx: LedgerRow): string | null {
+  if (!tx.raw_event) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(tx.raw_event) as { type?: unknown };
+    return typeof parsed.type === "string" ? parsed.type : null;
+  } catch {
+    return null;
+  }
 }
 
 function extractText(output: unknown): string {

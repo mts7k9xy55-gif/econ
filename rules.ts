@@ -26,14 +26,16 @@ export type Rule = {
 const rules: Rule[] = [
   {
     id: "revenue.stripe-payment",
-    summary: "Stripe or payment-like inflow is treated as revenue.",
+    summary: "Confirmed payment inflows are treated as revenue.",
     priority: 100,
     stopProcessing: true,
     mergePolicy: "first-wins",
-    match: (tx) => includesAny(tx, ["stripe", "payment", "invoice paid", "入金", "売上"]),
+    match: (tx) =>
+      (tx.amount > 0 && hasRawEventType(tx, ["payment.received"])) ||
+      (tx.amount > 0 && includesAny(tx, ["invoice paid", "入金", "売上"])),
     decision: () => ({
       category: "revenue",
-      action: "none",
+      decisionAction: "none",
       reason: "Matched rule: revenue.stripe-payment",
     }),
   },
@@ -47,7 +49,7 @@ const rules: Rule[] = [
       tx.amount >= 50000 && includesAny(tx, ["aws", "gcp", "azure", "openai", "anthropic", "cloudflare"]),
     decision: () => ({
       category: "infra_cost",
-      action: "alert_cost_increase",
+      decisionAction: "alert_cost_increase",
       reason: "Matched rule: cost.infrastructure-threshold",
     }),
   },
@@ -60,7 +62,7 @@ const rules: Rule[] = [
     match: (tx) => includesAny(tx, ["税", "tax", "vat", "消費税"]),
     decision: () => ({
       category: "tax",
-      action: "reserve_tax",
+      decisionAction: "reserve_tax",
       reason: "Matched rule: tax.reserve",
     }),
   },
@@ -70,10 +72,10 @@ const rules: Rule[] = [
     priority: 95,
     stopProcessing: true,
     mergePolicy: "first-wins",
-    match: (tx) => tx.amount < 0 || includesAny(tx, ["refund", "chargeback"]),
+    match: (tx) => tx.amount < 0 || hasRawEventType(tx, ["refund.issued"]) || includesAny(tx, ["refund", "chargeback"]),
     decision: () => ({
       category: "cash_outflow",
-      action: "alert_cash_outflow",
+      decisionAction: "alert_cash_outflow",
       reason: "Matched rule: cash-outflow.refund",
     }),
   },
@@ -129,6 +131,19 @@ export function applyRuleLayer(tx: LedgerRow, ruleSet: Rule[] = rules): RuleMatc
 function includesAny(tx: LedgerRow, patterns: string[]): boolean {
   const text = `${tx.description} ${tx.source}`.toLowerCase();
   return patterns.some((pattern) => text.includes(pattern));
+}
+
+function hasRawEventType(tx: LedgerRow, types: string[]): boolean {
+  if (!tx.raw_event) {
+    return false;
+  }
+
+  try {
+    const parsed = JSON.parse(tx.raw_event) as { type?: unknown };
+    return typeof parsed.type === "string" && types.includes(parsed.type);
+  } catch {
+    return false;
+  }
 }
 
 function getSortedRules(ruleSet: Rule[] = rules): Rule[] {

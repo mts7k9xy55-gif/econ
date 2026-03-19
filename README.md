@@ -25,3 +25,12 @@ This repository uses a simple AI development loop stored in `/ai`.
 2. GPT reads `ai/progress.md` and writes the next 1 to 3 priority tasks into `ai/next.md`.
 3. Codex reads `ai/next.md`, implements the work, and updates `ai/progress.md`.
 4. Repeat.
+
+## After Every Commit
+
+After every commit, run the AI development loop again in this order:
+
+1. Update `ai/progress.md`
+2. Analyze repository state
+3. Generate `ai/next.md`
+4. Choose a maximum of 3 tasks
