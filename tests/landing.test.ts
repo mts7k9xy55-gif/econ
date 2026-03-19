@@ -24,8 +24,8 @@ test("renderLandingPage includes English trust copy", () => {
   assert.match(page, /Start for free/);
 });
 
-test("renderLandingPage includes waitlist form and success state", () => {
-  const page = renderLandingPage("en", "success");
-  assert.match(page, /<form class="waitlist-form" method="post" action="\/waitlist">/);
-  assert.match(page, /You are on the waitlist/);
+test("renderLandingPage links primary CTA to app", () => {
+  const page = renderLandingPage("en");
+  assert.match(page, /href="\/app\?lang=en"/);
+  assert.match(page, /Start for free/);
 });

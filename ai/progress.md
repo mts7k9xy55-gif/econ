@@ -30,13 +30,13 @@
 - replay dryRun / partial replay / replay_runs logging を追加
 - balances / cashflow projection と read endpoints を追加
 - `/` に英日切替の LP を追加して、既存 Worker と同居させた
-- LP の CTA を D1 保存の waitlist 導線に変更した
+- Figma Make 案を踏まえて LP CTA を `/app` に戻し、最小 `/app` ダッシュボードを Worker 内に追加した
 
 ## Files changed
 - `actions.ts`
+- `app-page.ts`
 - `worker.ts`
 - `landing.ts`
-- `waitlist.ts`
 - `wrangler.toml`
 - `rules.ts`
 - `types.ts`
@@ -45,11 +45,10 @@
 - `schema.sql`
 - `migrations/0001_actions_retry_columns.sql`
 - `migrations/0002_replay_schema.sql`
-- `migrations/0003_waitlist_signups.sql`
 - `package.json`
 - `tests/ai.test.ts`
 - `tests/rules.test.ts`
-- `tests/waitlist.test.ts`
+- `tests/app-page.test.ts`
 - `replay.ts`
 - `scripts/replay.ts`
 - `ai/protocol.md`
@@ -74,7 +73,7 @@
 - balances / cashflow は replay と live ingest の両方で再計算可能にする
 - LP は別フロントエンドを増やさず Worker の root HTML として配信する
 - 初期言語は English / Japanese に絞り、中国語は実需が見えてから追加する
-- 取得導線は最小 friction を優先して email-only の waitlist から始める
+- 実アプリ導線を優先し、`/app` で既存 read API を束ねて見せる
 
 ## Blockers
 - Stripe refund executor は未実装

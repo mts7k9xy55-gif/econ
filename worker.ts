@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
+import { renderAppPage } from "./app-page";
 import { processAI } from "./ai";
 import { executeAction, fetchRunnableActions, listActionExecutors, processQueuedActions } from "./actions";
 import { econEventToLedgerInsert, normalizeIncomingEvent, normalizeStripeEvent } from "./event";
@@ -16,7 +17,6 @@ import {
   listRecentActions,
   listRecentLedger,
   listReplayRuns,
-  insertWaitlistSignup,
   recordProcessedEvent,
   updateLedgerCategory,
 } from "./ledger";
@@ -24,13 +24,6 @@ import { refreshReadModels, runReplay } from "./replay";
 import { applyRuleLayer, listRules } from "./rules";
 import { parseStripeEvent } from "./stripe";
 import type { EconEvent } from "./types";
-import {
-  buildWaitlistRedirect,
-  isValidWaitlistEmail,
-  normalizeWaitlistEmail,
-  normalizeWaitlistLocale,
-  resolveWaitlistStatus,
-} from "./waitlist";
 
 type Bindings = {
   AI?: Ai;
@@ -56,8 +49,12 @@ const app = new Hono<{ Bindings: Bindings }>();
 
 app.get("/", (c) => {
   const locale = resolveLandingLocale(c.req.query("lang"), c.req.header("Accept-Language"));
-  const waitlistStatus = resolveWaitlistStatus(c.req.query("waitlist"));
-  return c.html(renderLandingPage(locale, waitlistStatus));
+  return c.html(renderLandingPage(locale));
+});
+
+app.get("/app", (c) => {
+  const locale = resolveLandingLocale(c.req.query("lang"), c.req.header("Accept-Language"));
+  return c.html(renderAppPage(locale));
 });
 
 app.get("/health", (c) => c.json({ ok: true }));
@@ -148,53 +145,6 @@ app.post("/webhooks/stripe", async (c) => {
   const result = await ingestEvent(c.env, econEvent);
 
   return c.json({ ok: true, source: "stripe", event: econEvent, ...result });
-});
-
-app.post("/waitlist", async (c) => {
-  const payload = await parseWaitlistPayload(c.req.raw);
-  const locale = normalizeWaitlistLocale(payload.locale);
-  const email = normalizeWaitlistEmail(payload.email);
-  const wantsJson = c.req.header("accept")?.includes("application/json") ?? false;
-
-  if (!isValidWaitlistEmail(email)) {
-    if (wantsJson) {
-      return c.json({ ok: false, error: "Invalid email address" }, 400);
-    }
-
-    return c.redirect(buildWaitlistRedirect(locale, "invalid"), 303);
-  }
-
-  try {
-    const signup = await insertWaitlistSignup(c.env.DB, {
-      id: `wait_${crypto.randomUUID()}`,
-      email,
-      locale,
-      sourcePath: "/",
-      userAgent: c.req.header("user-agent") ?? null,
-    });
-
-    if (wantsJson) {
-      return c.json({ ok: true, signup }, 201);
-    }
-
-    return c.redirect(buildWaitlistRedirect(locale, "success"), 303);
-  } catch (error) {
-    if (isUniqueConstraintError(error)) {
-      if (wantsJson) {
-        return c.json({ ok: true, duplicate: true }, 200);
-      }
-
-      return c.redirect(buildWaitlistRedirect(locale, "exists"), 303);
-    }
-
-    console.error(error);
-
-    if (wantsJson) {
-      return c.json({ ok: false, error: "Failed to save waitlist signup" }, 500);
-    }
-
-    return c.redirect(buildWaitlistRedirect(locale, "error"), 303);
-  }
 });
 
 app.onError((error, c) => {
@@ -298,28 +248,4 @@ function clampLimit(value: number): number {
   }
 
   return Math.min(Math.trunc(value), 200);
-}
-
-async function parseWaitlistPayload(request: Request): Promise<{ email?: string; locale?: string }> {
-  const contentType = request.headers.get("content-type")?.toLowerCase() ?? "";
-
-  if (contentType.includes("application/json")) {
-    return (await request.json().catch(() => ({}))) as { email?: string; locale?: string };
-  }
-
-  if (contentType.includes("application/x-www-form-urlencoded") || contentType.includes("multipart/form-data")) {
-    const formData = await request.formData();
-    const email = formData.get("email");
-    const locale = formData.get("locale");
-    return {
-      email: typeof email === "string" ? email : undefined,
-      locale: typeof locale === "string" ? locale : undefined,
-    };
-  }
-
-  const params = new URLSearchParams(await request.text());
-  return {
-    email: params.get("email") ?? undefined,
-    locale: params.get("locale") ?? undefined,
-  };
 }

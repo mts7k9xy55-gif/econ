@@ -89,15 +89,6 @@ export type ReplayRunRow = {
   status: string;
 };
 
-export type WaitlistSignupRow = {
-  id: string;
-  email: string;
-  locale: string;
-  source_path: string;
-  user_agent: string | null;
-  created_at: string;
-};
-
 export async function insertLedgerEntry(db: D1Database, entry: LedgerInsert): Promise<LedgerRow> {
   const source = entry.source ?? "manual";
   const rawEvent = entry.rawEvent ? JSON.stringify(entry.rawEvent) : null;
@@ -504,56 +495,6 @@ export async function listReplayRuns(db: D1Database, limit = 20): Promise<Replay
     .all<ReplayRunRow>();
 
   return results;
-}
-
-export async function insertWaitlistSignup(
-  db: D1Database,
-  signup: {
-    id: string;
-    email: string;
-    locale: string;
-    sourcePath: string;
-    userAgent: string | null;
-    createdAt?: string;
-  },
-): Promise<WaitlistSignupRow> {
-  const createdAt = signup.createdAt ?? new Date().toISOString();
-  await ensureWaitlistSchema(db);
-
-  await db
-    .prepare(
-      `INSERT INTO waitlist_signups (id, email, locale, source_path, user_agent, created_at)
-       VALUES (?, ?, ?, ?, ?, ?)`,
-    )
-    .bind(signup.id, signup.email, signup.locale, signup.sourcePath, signup.userAgent, createdAt)
-    .run();
-
-  return {
-    id: signup.id,
-    email: signup.email,
-    locale: signup.locale,
-    source_path: signup.sourcePath,
-    user_agent: signup.userAgent,
-    created_at: createdAt,
-  };
-}
-
-async function ensureWaitlistSchema(db: D1Database): Promise<void> {
-  await db.batch([
-    db.prepare(
-      `CREATE TABLE IF NOT EXISTS waitlist_signups (
-         id TEXT PRIMARY KEY,
-         email TEXT NOT NULL UNIQUE,
-         locale TEXT NOT NULL,
-         source_path TEXT NOT NULL,
-         user_agent TEXT,
-         created_at TEXT NOT NULL
-       )`,
-    ),
-    db.prepare(
-      "CREATE INDEX IF NOT EXISTS idx_waitlist_signups_created_at ON waitlist_signups(created_at DESC)",
-    ),
-  ]);
 }
 
 export async function resetProjections(db: D1Database): Promise<void> {

@@ -75,17 +75,7 @@ CREATE TABLE IF NOT EXISTS replay_runs (
   status TEXT NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS waitlist_signups (
-  id TEXT PRIMARY KEY,
-  email TEXT NOT NULL UNIQUE,
-  locale TEXT NOT NULL,
-  source_path TEXT NOT NULL,
-  user_agent TEXT,
-  created_at TEXT NOT NULL
-);
-
 CREATE INDEX IF NOT EXISTS idx_ledger_date ON ledger(date DESC);
 CREATE INDEX IF NOT EXISTS idx_actions_status ON actions(status);
 CREATE INDEX IF NOT EXISTS idx_econ_event_timestamp ON econ_event(timestamp ASC);
 CREATE INDEX IF NOT EXISTS idx_econ_event_correlation_id ON econ_event(correlation_id);
-CREATE INDEX IF NOT EXISTS idx_waitlist_signups_created_at ON waitlist_signups(created_at DESC);

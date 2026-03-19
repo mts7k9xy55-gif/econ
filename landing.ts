@@ -1,6 +1,5 @@
-import type { WaitlistStatus } from "./waitlist";
-
 type LandingLocale = "en" | "ja";
+const APP_URL = "/app";
 
 type LandingCopy = {
   localeLabel: string;
@@ -36,11 +35,6 @@ type LandingCopy = {
   closingBody: string;
   closingNote: string;
   footer: string;
-  waitlistLabel: string;
-  waitlistPlaceholder: string;
-  waitlistButton: string;
-  waitlistMicrocopy: string;
-  waitlistMessages: Record<Exclude<WaitlistStatus, "idle">, string>;
 };
 
 const copyByLocale: Record<LandingLocale, LandingCopy> = {
@@ -127,16 +121,6 @@ const copyByLocale: Record<LandingLocale, LandingCopy> = {
     closingBody: "Start with visibility. Then act on the right savings opportunities with confidence.",
     closingNote: "English and Japanese are included first. Add more languages after traction shows where demand actually is.",
     footer: "Built for clarity, approval, and calmer money decisions.",
-    waitlistLabel: "Email",
-    waitlistPlaceholder: "you@example.com",
-    waitlistButton: "Join the waitlist",
-    waitlistMicrocopy: "Early access starts with a simple email. No spam, no automatic charges.",
-    waitlistMessages: {
-      success: "You are on the waitlist. We will reach out when early access opens.",
-      exists: "This email is already on the waitlist.",
-      invalid: "Enter a valid email address.",
-      error: "Something went wrong. Try again in a moment.",
-    },
   },
   ja: {
     localeLabel: "日本語",
@@ -221,16 +205,6 @@ const copyByLocale: Record<LandingLocale, LandingCopy> = {
     closingBody: "まずはお金の流れを見える状態にし、そのあとで削減や変更を正しく判断できます。",
     closingNote: "まずは英語と日本語で十分です。中国語は実需が見えてから追加する方が設計も運用もぶれません。",
     footer: "理解から始めて、承認で終える。静かな財務オペレーション。",
-    waitlistLabel: "メールアドレス",
-    waitlistPlaceholder: "you@example.com",
-    waitlistButton: "ウェイトリストに参加",
-    waitlistMicrocopy: "まずはメールだけで十分です。スパム送信や自動課金はありません。",
-    waitlistMessages: {
-      success: "ウェイトリストに登録しました。早期アクセス開始時に連絡します。",
-      exists: "このメールアドレスはすでに登録済みです。",
-      invalid: "有効なメールアドレスを入力してください。",
-      error: "エラーが発生しました。少し待ってから再度お試しください。",
-    },
   },
 };
 
@@ -246,11 +220,9 @@ export function resolveLandingLocale(langParam: string | undefined, acceptLangua
   return "en";
 }
 
-export function renderLandingPage(locale: LandingLocale, waitlistStatus: WaitlistStatus = "idle"): string {
+export function renderLandingPage(locale: LandingLocale): string {
   const copy = copyByLocale[locale];
   const otherLocale = locale === "en" ? "ja" : "en";
-  const waitlistMessage = waitlistStatus === "idle" ? "" : copy.waitlistMessages[waitlistStatus];
-  const waitlistStateClass = waitlistStatus === "success" ? "waitlist-feedback success" : "waitlist-feedback";
 
   return `<!doctype html>
 <html lang="${locale}">
@@ -705,52 +677,6 @@ export function renderLandingPage(locale: LandingLocale, waitlistStatus: Waitlis
         font-size: 0.95rem;
       }
 
-      .waitlist-form {
-        display: grid;
-        grid-template-columns: minmax(0, 1fr) auto;
-        gap: 12px;
-      }
-
-      .waitlist-field {
-        display: grid;
-        gap: 8px;
-      }
-
-      .waitlist-field label {
-        font-size: 0.92rem;
-        color: rgba(255, 255, 255, 0.78);
-      }
-
-      .waitlist-field input {
-        width: 100%;
-        min-height: 52px;
-        border-radius: 16px;
-        border: 1px solid rgba(255, 255, 255, 0.18);
-        background: rgba(255, 255, 255, 0.10);
-        color: #fff;
-        padding: 0 16px;
-        font: inherit;
-      }
-
-      .waitlist-field input::placeholder {
-        color: rgba(255, 255, 255, 0.44);
-      }
-
-      .waitlist-feedback {
-        margin: 0;
-        padding: 12px 14px;
-        border-radius: 14px;
-        background: rgba(248, 113, 113, 0.14);
-        color: #fee2e2;
-        border: 1px solid rgba(248, 113, 113, 0.24);
-      }
-
-      .waitlist-feedback.success {
-        background: rgba(134, 239, 172, 0.14);
-        color: #dcfce7;
-        border-color: rgba(134, 239, 172, 0.24);
-      }
-
       @media (max-width: 960px) {
         .hero,
         .grid-4,
@@ -793,10 +719,6 @@ export function renderLandingPage(locale: LandingLocale, waitlistStatus: Waitlis
           width: 100%;
         }
 
-        .waitlist-form {
-          grid-template-columns: 1fr;
-        }
-
         .lang-switch {
           justify-content: space-between;
         }
@@ -831,7 +753,7 @@ export function renderLandingPage(locale: LandingLocale, waitlistStatus: Waitlis
             <h1>${copy.heroTitle}</h1>
             <p class="lede">${copy.heroBody}</p>
             <div class="hero-actions">
-              <a class="button button-primary" href="#cta">${copy.primaryCta}</a>
+              <a class="button button-primary" href="${APP_URL}?lang=${locale}">${copy.primaryCta}</a>
               <a class="button button-secondary" href="#how-it-works">${copy.secondaryCta}</a>
             </div>
             <div class="step-strip">
@@ -976,20 +898,11 @@ export function renderLandingPage(locale: LandingLocale, waitlistStatus: Waitlis
             <h2>${copy.closingTitle}</h2>
             <p class="lede">${copy.closingBody}</p>
             <div class="cta-actions">
-              <form class="waitlist-form" method="post" action="/waitlist">
-                <input type="hidden" name="locale" value="${locale}" />
-                <div class="waitlist-field">
-                  <label for="email">${copy.waitlistLabel}</label>
-                  <input id="email" name="email" type="email" placeholder="${copy.waitlistPlaceholder}" required />
-                </div>
-                <button class="button button-primary" type="submit">${copy.waitlistButton}</button>
-              </form>
-              ${waitlistMessage ? `<p class="${waitlistStateClass}">${waitlistMessage}</p>` : ""}
+              <a class="button button-primary" href="${APP_URL}?lang=${locale}">${copy.primaryCta}</a>
               <a class="button button-secondary" href="/?lang=${otherLocale}#cta">
                 ${otherLocale === "en" ? "View in English" : "日本語で見る"}
               </a>
             </div>
-            <p class="meta">${copy.waitlistMicrocopy}</p>
             <p class="meta">${copy.closingNote}</p>
             <div class="footer">${copy.footer}</div>
           </div>
