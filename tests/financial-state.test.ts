@@ -47,3 +47,11 @@ test("moneytree endpoints limited to known read-only routes",()=>{
   assert.equal(paths.securityPositions,"/link/investments/accounts/1234/positions.json");
   assert.throws(()=>moneytreeReadPaths("../1234"),/Invalid/);
 });
+
+test("older snapshots must not erase newer brokerage positions",()=>{
+  const initial=mergeFinancialState(emptyFinancialState(),snapshot,"2026-10-19T00:00:00.000Z");
+  const older={...snapshot,accounts:snapshot.accounts.map(a=>({...a,asOf:"2026-10-18T00:00:00.000Z"})),positions:[{...snapshot.positions[0],asOf:"2026-10-18T00:00:00.000Z",marketValue:100}]};
+  const result=mergeFinancialState(initial,older,"2026-10-19T01:00:00.000Z");
+  assert.equal(result.positions[0].marketValue,250000);
+  assert.equal(result.accounts[1].balance,250000);
+});
