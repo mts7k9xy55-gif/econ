@@ -116,17 +116,19 @@ export function validateFinancialSnapshot(snapshot: FinancialSnapshot): Financia
  */
 export function mergeFinancialState(previous: FinancialState, incoming: FinancialSnapshot, now = new Date().toISOString()): FinancialState {
   validateFinancialSnapshot(incoming);
-  const replaced = new Set(incoming.accounts.map(a=>a.id));
   const acc = new Map(previous.accounts.map(a=>[a.id,a]));
   for (const account of incoming.accounts) {
     const older=acc.get(account.id);
     if (!older || Date.parse(account.asOf)>=Date.parse(older.asOf)) acc.set(account.id,account);
   }
-  const positions = previous.positions.filter(p=>!replaced.has(p.accountId));
+  // Only replace positions for accounts whose snapshot was accepted.
+  const accepted=new Set(incoming.accounts.filter(a=>{
+    const old=previous.accounts.find(p=>p.id===a.id);
+    return !old||Date.parse(a.asOf)>=Date.parse(old.asOf);
+  }).map(a=>a.id));
+  const positions = previous.positions.filter(p=>!accepted.has(p.accountId));
   for (const p of incoming.positions) {
-    const current=acc.get(p.accountId);
-    // Do not replace positions with older snapshots.
-    if (current && Date.parse(p.asOf)>=Date.parse(current.asOf)) positions.push(p);
+    if (accepted.has(p.accountId)) positions.push(p);
   }
   const trans = new Map(previous.transactions.map(t=>[t.id,t]));
   for (const t of incoming.transactions) {
